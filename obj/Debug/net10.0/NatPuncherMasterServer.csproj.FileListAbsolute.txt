@@ -119,7 +119,6 @@ C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Deb
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\rjsmcshtml.dswa.cache.json
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\scopedcss\bundle\NatPuncherMasterServer.styles.css
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\compressed\blc2iulv7r-{0}-p4pv43igk9-p4pv43igk9.gz
-C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\compressed\f40yibgn0m-{0}-pwz6tetuvj-pwz6tetuvj.gz
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\staticwebassets.build.json
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\staticwebassets.build.json.cache
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\staticwebassets.development.json
@@ -131,3 +130,4 @@ C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Deb
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\NatPuncherMasterServer.pdb
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\NatPuncherMasterServer.genruntimeconfig.cache
 C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\ref\NatPuncherMasterServer.dll
+C:\Users\Alex\Documents\potential-adventure\Tools\NatPuncherMasterServer\obj\Debug\net10.0\compressed\f40yibgn0m-{0}-tqcu9c0h45-tqcu9c0h45.gz

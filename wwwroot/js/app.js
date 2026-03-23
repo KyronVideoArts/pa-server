@@ -154,15 +154,31 @@ async function refreshServers() {
     list.innerHTML = data.map(s => `
       <a class="server-row" href="${s.joinUrl || '#'}">
         <div class="server-status-dot"></div>
-        <div>
+        <div style="flex:1">
           <div class="server-name">${escHtml(s.name)}</div>
-          <div class="server-map">📍 ${escHtml(s.map)}</div>
+          <div class="server-map" style="display:flex;gap:1.25rem;margin-top:0.4rem;align-items:center">
+            <span>📍 ${escHtml(s.map)}</span>
+            <span style="color:var(--text-muted);font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;border:1px solid rgba(255,255,255,0.1)">${escHtml(s.mode)}</span>
+            <span style="color:var(--text-muted);display:flex;align-items:center;gap:0.3rem">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              ${escHtml(s.hostName)}
+            </span>
+            <span style="color:var(--text-muted);display:flex;align-items:center;gap:0.3rem">
+              👥 ${s.players}/${s.maxPlayers}
+            </span>
+            <span style="color:var(--text-muted);background:rgba(255,255,255,0.05);padding:0.1rem 0.4rem;border-radius:4px;font-family:monospace;font-size:0.75rem" title="Connect via console: connect master_ip:${s.port}">
+              🔌 ${s.port}
+            </span>
+            ${s.bots ? "<span title='Bots Enabled'>🤖</span>" : ""}
+          </div>
         </div>
-        <div style="display:flex;gap:0.4rem">
+        <div style="display:flex;gap:0.4rem;align-items:center;height:fit-content">
           ${s.official ? '<span class="server-badge badge-official">Official</span>' : '<span class="server-badge badge-p2p">P2P</span>'}
           ${s.locked ? '<span class="server-badge badge-locked">🔒</span>' : ''}
         </div>
-        ${s.joinUrl ? '<span class="btn-join">Join</span>' : '<span style="font-size:0.8rem;color:var(--text-muted)">Login</span>'}
+        <div style="display:flex;align-items:center">
+          ${s.joinUrl ? '<span class="btn-join">Join →</span>' : '<span style="font-size:0.8rem;color:var(--text-muted)">Login to Join</span>'}
+        </div>
       </a>`).join('');
   } catch(e) {}
 }

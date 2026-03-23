@@ -192,8 +192,8 @@ namespace MasterServer
 					if (profile != null) { mpGems = profile.MultiplayerGems; spGems = profile.SingleplayerGems; }
 				}
 
-				// Evict stale lobbies
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
+				// Evict stale lobbies (1 min timeout)
+				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 1).Select(kv => kv.Key).ToList();
 				foreach (var s in stale) ServerState.ActiveLobbies.TryRemove(s, out _);
 
 				var serverRows = new System.Text.StringBuilder();
@@ -667,7 +667,7 @@ namespace MasterServer
 				bool loggedIn = context.User.Identity?.IsAuthenticated == true;
 				string username = context.User.Identity?.Name ?? "";
 
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
+				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 1).Select(kv => kv.Key).ToList();
 				foreach (var s in stale) ServerState.ActiveLobbies.TryRemove(s, out _);
 
 				await JsonSerializer.SerializeAsync(context.Response.Body, ServerState.ActiveLobbies.Values.Select(l => {
@@ -677,7 +677,20 @@ namespace MasterServer
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new { name = l.LobbyName, map = l.CurrentMap, official = l.IsOfficial, locked = l.HasPassword, joinUrl, address = l.AdvertisedAddress, port = l.AdvertisedPort };
+					return new { 
+						name = l.LobbyName, 
+						map = l.CurrentMap, 
+						official = l.IsOfficial, 
+						locked = l.HasPassword, 
+						joinUrl, 
+						address = l.AdvertisedAddress, 
+						port = l.AdvertisedPort,
+						hostName = l.HostName,
+						players = l.CurrentPlayers,
+						maxPlayers = l.MaxPlayers,
+						mode = l.MapMode,
+						bots = l.UseBots
+					};
 				}));
 			});
 

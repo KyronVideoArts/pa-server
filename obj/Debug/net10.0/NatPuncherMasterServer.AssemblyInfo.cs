@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NatPuncherMasterServer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+71aaa6e92112c9afc7e1714ae3e0d7047e497822")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+602271540ba15ac31e37999a30d5128377fff04e")]
 [assembly: System.Reflection.AssemblyProductAttribute("NatPuncherMasterServer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NatPuncherMasterServer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

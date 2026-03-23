@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,6 +16,7 @@ namespace MasterServer.Services
 		public IPAddress? ExpectedHostIp;
 		public ConcurrentDictionary<IPEndPoint, UdpClient> ClientSockets = new ConcurrentDictionary<IPEndPoint, UdpClient>();
 		private CancellationTokenSource _cts = new CancellationTokenSource();
+		private int _virtualPortCounter = 0;
 
 		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null)
 		{
@@ -81,15 +83,23 @@ namespace MasterServer.Services
 					var res = await MainSocket.ReceiveAsync();
 					var remoteEp = NormalizeEndpoint(res.RemoteEndPoint)!;
 
-					// If this packet came from the host IP, use it to set or update the HostEndpoint.
+					// If this packet came from the host IP, check if it's a registration packet.
 					if (ExpectedHostIp != null && remoteEp.Address.Equals(ExpectedHostIp))
 					{
-						if (HostEndpoint == null || HostEndpoint.Port != remoteEp.Port)
+						string? msg = null;
+						try { msg = Encoding.ASCII.GetString(res.Buffer); } catch { }
+
+						if (msg != null && msg.StartsWith("REGISTER_HOST"))
 						{
-							HostEndpoint = remoteEp;
-							Console.WriteLine($"[PROXY] HostEndpoint updated/set to {HostEndpoint}");
+							if (HostEndpoint == null || HostEndpoint.Port != remoteEp.Port)
+							{
+								HostEndpoint = remoteEp;
+								Console.WriteLine($"[PROXY] HostEndpoint updated/set to {HostEndpoint} (Tickle)");
+							}
+							continue;
 						}
-						continue;
+						// If it's from host IP but NOT a registration packet, treat it as a potential client packet.
+						// This allows clients sharing the same external IP as the host to work.
 					}
 
 					// If host hasn't been set yet, check if this is the first sender and we have no expected IP.
@@ -103,11 +113,13 @@ namespace MasterServer.Services
 					// --- This is a client packet. Forward it to the host via a virtual socket. ---
 					if (!ClientSockets.TryGetValue(remoteEp, out var virtualSocket))
 					{
-						virtualSocket = new UdpClient(0);
+						// Try to use a port the host might have tickled (JoinPort + 1-5)
+						// This helps with Port-Restricted NAT.
+						virtualSocket = CreateVirtualSocket();
+						
 						int vPort = ((IPEndPoint)virtualSocket.Client.LocalEndPoint!).Port;
 						Console.WriteLine($"[PROXY] New client connected from {remoteEp}. Created virtual socket on port {vPort}");
 
-						SuppressConnectionReset(virtualSocket);
 						ClientSockets[remoteEp] = virtualSocket;
 
 						// Spin up the reverse-direction forwarder (host → client)
@@ -115,7 +127,14 @@ namespace MasterServer.Services
 					}
 
 					// Forward client data to host
-					await virtualSocket.SendAsync(res.Buffer, res.Buffer.Length, HostEndpoint);
+					if (HostEndpoint != null)
+					{
+						await virtualSocket.SendAsync(res.Buffer, res.Buffer.Length, HostEndpoint);
+					}
+					else
+					{
+						Console.WriteLine($"[PROXY] Warning: Dropping client packet from {remoteEp} because HostEndpoint is not set yet.");
+					}
 				}
 				catch (ObjectDisposedException) { break; }
 				catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted) { break; }
@@ -126,6 +145,28 @@ namespace MasterServer.Services
 				}
 			}
 			Console.WriteLine($"[PROXY] Start() loop ended for JoinPort {JoinPort}");
+		}
+
+		private UdpClient CreateVirtualSocket()
+		{
+			// Try to bind to ports the host might have tickled (JoinPort + 1-5)
+			for (int i = 0; i < 5; i++)
+			{
+				int offset = (Interlocked.Increment(ref _virtualPortCounter) % 5) + 1;
+				int port = JoinPort + offset;
+				try
+				{
+					var s = new UdpClient(port);
+					SuppressConnectionReset(s);
+					return s;
+				}
+				catch { /* Port already in use, try next */ }
+			}
+
+			// Fallback to random port
+			var fallback = new UdpClient(0);
+			SuppressConnectionReset(fallback);
+			return fallback;
 		}
 
 		/// <summary>
