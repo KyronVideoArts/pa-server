@@ -24,6 +24,8 @@ namespace MasterServer.Services
 			MainSocket = new UdpClient(port);
 			HostEndpoint = NormalizeEndpoint(hostEp);
 			ExpectedHostIp = expectedHostIp;
+			if (ExpectedHostIp != null && ExpectedHostIp.IsIPv4MappedToIPv6)
+				ExpectedHostIp = ExpectedHostIp.MapToIPv4();
 
 			// Suppress WSAECONNRESET on Windows to prevent ReceiveAsync from throwing
 			// when a peer is unreachable.
@@ -98,8 +100,16 @@ namespace MasterServer.Services
 							}
 							continue;
 						}
-						// If it's from host IP but NOT a registration packet, treat it as a potential client packet.
-						// This allows clients sharing the same external IP as the host to work.
+						
+						// If it's exactly from the host's actual endpoint, ignore it (we already handled the tickle).
+						// Treating the host as its own client will cause loops and confusion.
+						if (IsHostEndpoint(remoteEp))
+						{
+							continue;
+						}
+						
+						// If it's from the same IP but a DIFFERENT port, it's likely a client on the same machine/LAN.
+						// Fall through to treat it as a client.
 					}
 
 					// If host hasn't been set yet, check if this is the first sender and we have no expected IP.

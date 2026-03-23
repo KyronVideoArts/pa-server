@@ -101,8 +101,8 @@ namespace MasterServer
 			return await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
 		}
 
-		static List<string> GetUnlocks(PlayerProfile p) =>
-			JsonSerializer.Deserialize<List<string>>(p.UnlockedWeapons ?? "[\"default\"]") ?? new List<string> { "default" };
+		static List<string> GetUnlocks(PlayerProfile? p) =>
+			JsonSerializer.Deserialize<List<string>>(p?.UnlockedWeapons ?? "[\"blaster\"]") ?? new List<string> { "blaster" };
 
 		static string WeaponCards(List<WeaponShopEntry> weapons, List<string> unlocks, string equipped, string mode)
 		{
@@ -316,6 +316,7 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var u = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
+				if (u == null) { context.Response.Redirect("/logout"); return; }
 
 				string kd = u.TotalFrags > 0 ? u.TotalFrags.ToString() : "—";
 
@@ -360,6 +361,7 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var u = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
+				if (u == null) { context.Response.Redirect("/logout"); return; }
 
 				var weapons = LoadWeaponEntries(app);
 				// Always unlock "blaster" for everyone
@@ -572,6 +574,7 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
+				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				var unlocks = JsonSerializer.Deserialize<List<string>>(user.UnlockedWeapons ?? "[]") ?? new List<string>();
 				if (unlocks.Contains(req.WeaponId)) { await context.Response.WriteAsync("Already unlocked!"); return; }
@@ -607,6 +610,7 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
+				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				var unlocks = JsonSerializer.Deserialize<List<string>>(user.UnlockedWeapons ?? "[]") ?? new List<string>();
 				if (req.WeaponId != "blaster" && !unlocks.Contains(req.WeaponId))
@@ -632,6 +636,7 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
+				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				if (req.Type == "gadget")
 				{
