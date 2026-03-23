@@ -221,6 +221,9 @@ namespace MasterServer
 					      <span style='color:var(--text-muted);display:flex;align-items:center;gap:0.3rem'>
 					        👥 {lobby.CurrentPlayers}/{lobby.MaxPlayers}
 					      </span>
+					      <span style='color:var(--text-muted);background:rgba(255,255,255,0.05);padding:0.1rem 0.4rem;border-radius:4px;font-family:monospace;font-size:0.75rem' title='Connect via console: connect master_ip:{lobby.AdvertisedPort}'>
+					        🔌 {lobby.AdvertisedPort}
+					      </span>
 					      {(lobby.UseBots ? "<span title='Bots Enabled'>🤖</span>" : "")}
 					    </div>
 					  </div>
@@ -674,7 +677,7 @@ namespace MasterServer
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new { name = l.LobbyName, map = l.CurrentMap, official = l.IsOfficial, locked = l.HasPassword, joinUrl };
+					return new { name = l.LobbyName, map = l.CurrentMap, official = l.IsOfficial, locked = l.HasPassword, joinUrl, address = l.AdvertisedAddress, port = l.AdvertisedPort };
 				}));
 			});
 
