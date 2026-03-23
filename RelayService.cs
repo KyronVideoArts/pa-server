@@ -12,14 +12,16 @@ namespace MasterServer.Services
 		public int JoinPort;
 		public UdpClient MainSocket;
 		public IPEndPoint? HostEndpoint;
+		public IPAddress? ExpectedHostIp;
 		public ConcurrentDictionary<IPEndPoint, UdpClient> ClientSockets = new ConcurrentDictionary<IPEndPoint, UdpClient>();
 		private CancellationTokenSource _cts = new CancellationTokenSource();
 
-		public RelayLobby(int port, IPEndPoint? hostEp = null)
+		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null)
 		{
 			JoinPort = port;
 			MainSocket = new UdpClient(port);
 			HostEndpoint = NormalizeEndpoint(hostEp);
+			ExpectedHostIp = expectedHostIp;
 
 			// Suppress WSAECONNRESET on Windows to prevent ReceiveAsync from throwing
 			// when a peer is unreachable.
@@ -79,19 +81,22 @@ namespace MasterServer.Services
 					var res = await MainSocket.ReceiveAsync();
 					var remoteEp = NormalizeEndpoint(res.RemoteEndPoint)!;
 
-					// If host hasn't been set yet, treat the first sender as the host.
-					if (HostEndpoint == null)
+					// If this packet came from the host IP, use it to set or update the HostEndpoint.
+					if (ExpectedHostIp != null && remoteEp.Address.Equals(ExpectedHostIp))
 					{
-						HostEndpoint = remoteEp;
-						Console.WriteLine($"[PROXY] HostEndpoint set to {HostEndpoint}");
+						if (HostEndpoint == null || HostEndpoint.Port != remoteEp.Port)
+						{
+							HostEndpoint = remoteEp;
+							Console.WriteLine($"[PROXY] HostEndpoint updated/set to {HostEndpoint}");
+						}
 						continue;
 					}
 
-					// If this packet came from the host directly on MainSocket, ignore it.
-					// Host responses should arrive on the per-client virtual sockets instead.
-					if (IsHostEndpoint(remoteEp))
+					// If host hasn't been set yet, check if this is the first sender and we have no expected IP.
+					if (HostEndpoint == null && ExpectedHostIp == null)
 					{
-						Console.WriteLine($"[PROXY] Received unexpected packet from Host on MainSocket. Dropping.");
+						HostEndpoint = remoteEp;
+						Console.WriteLine($"[PROXY] HostEndpoint set to {HostEndpoint} (first sender)");
 						continue;
 					}
 

@@ -739,25 +739,33 @@ namespace MasterServer
 				if (hostAddr == "::1") hostAddr = "127.0.0.1";
 				
 				var hostIp = System.Net.IPAddress.Parse(hostAddr);
+				if (hostIp.IsIPv4MappedToIPv6) hostIp = hostIp.MapToIPv4();
+				hostAddr = hostIp.ToString();
+
+				var advertisedAddress = app.Configuration["AddressOverride"];
+				if (string.IsNullOrEmpty(advertisedAddress))
+				{
+					advertisedAddress = context.Request.Host.Host;
+				}
+
 				var hostEp = new System.Net.IPEndPoint(hostIp, request?.RequestedPort ?? 64087);
 
 				// REUSE OR RECREATE: Check if a relay for this host already exists and is fresh.
 				// This prevents the "Remote disconnected" issue when the game re-calls prepare.
 				var existing = ServerState.ActiveRelays
-					.FirstOrDefault(kv => kv.Value.HostEndpoint != null
-						&& kv.Value.HostEndpoint.Address.Equals(hostEp.Address)
-						&& kv.Value.HostEndpoint.Port == hostEp.Port);
+					.FirstOrDefault(kv => kv.Value.ExpectedHostIp != null
+						&& kv.Value.ExpectedHostIp.Equals(hostIp));
 
 				if (existing.Value != null)
 				{
 					if (ServerState.ActiveLobbies.TryGetValue(existing.Key, out var existingLobby))
 					{
-						Console.WriteLine($"[PROXY] Reusing existing relay {existing.Key} for host {hostEp}");
+						Console.WriteLine($"[PROXY] Reusing existing relay {existing.Key} for host {hostIp}");
 						context.Response.ContentType = "application/json";
 						var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 						await JsonSerializer.SerializeAsync(context.Response.Body, new
 						{
-							advertisedAddress = hostAddr,
+							advertisedAddress = advertisedAddress,
 							advertisedPort = existing.Value.JoinPort,
 							joinCode = existing.Key,
 							hasPassword = existingLobby.HasPassword
@@ -768,19 +776,18 @@ namespace MasterServer
 
 				// If no fresh one to reuse, tear down any old ones for this host (stale)
 				var staleRelays = ServerState.ActiveRelays
-					.Where(kv => kv.Value.HostEndpoint != null
-						&& kv.Value.HostEndpoint.Address.Equals(hostEp.Address)
-						&& kv.Value.HostEndpoint.Port == hostEp.Port)
+					.Where(kv => kv.Value.ExpectedHostIp != null
+						&& kv.Value.ExpectedHostIp.Equals(hostIp))
 					.Select(kv => kv.Key).ToList();
 				foreach (var staleKey in staleRelays)
 				{
-					Console.WriteLine($"[PROXY] Tearing down stale relay {staleKey} for host {hostEp}");
+					Console.WriteLine($"[PROXY] Tearing down stale relay {staleKey} for host {hostIp}");
 					if (ServerState.ActiveRelays.TryRemove(staleKey, out var oldRelay))
 						oldRelay.Stop();
 					ServerState.ActiveLobbies.TryRemove(staleKey, out _);
 				}
 
-				var relay = new RelayLobby(0, hostEp);
+				var relay = new RelayLobby(0, hostEp, hostIp);
 				var boundPort = ((System.Net.IPEndPoint)relay.MainSocket.Client.LocalEndPoint!).Port;
 				var joinCode = boundPort.ToString();
 				_ = relay.Start();
@@ -791,7 +798,7 @@ namespace MasterServer
 					JoinCode = joinCode,
 					LobbyName = !string.IsNullOrEmpty(request?.LobbyName) ? request.LobbyName : "P2P Server",
 					HostName = request?.HostName ?? "Unknown",
-					AdvertisedAddress = hostAddr,
+					AdvertisedAddress = advertisedAddress,
 					AdvertisedPort = boundPort,
 					IsOfficial = request?.ServerApiKey == ServerState.ServerApiKey,
 					HasPassword = !string.IsNullOrEmpty(request?.PasswordHash),
@@ -805,7 +812,7 @@ namespace MasterServer
 				var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 				await JsonSerializer.SerializeAsync(context.Response.Body, new
 				{
-					advertisedAddress = hostAddr,
+					advertisedAddress = advertisedAddress,
 					advertisedPort = boundPort,
 					joinCode = joinCode,
 					hasPassword = lobby.HasPassword
