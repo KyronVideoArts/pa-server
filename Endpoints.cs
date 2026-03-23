@@ -57,13 +57,13 @@ namespace MasterServer
 <head>
   <meta charset='UTF-8'/>
   <meta name='viewport' content='width=device-width,initial-scale=1'/>
-  <title>{title} - Potential Adventure</title>
+  <title>{title} - CaromMasse</title>
   <link rel='stylesheet' href='/css/site.css'/>
 </head>
 <body>
 <div id='toast-container'></div>
 <nav>
-  <a href='/' class='nav-brand'>⚔ Potential Adventure</a>
+  <a href='/' class='nav-brand'>⬤ Carom<span>Masse</span></a>
   <ul class='nav-links'>
     {navLink("/", "Servers", "🌐", "home")}
     {(loggedIn ? navLink("/loadout", "Loadout", "🎒", "loadout") : "")}
@@ -101,8 +101,8 @@ namespace MasterServer
 			return await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
 		}
 
-		static List<string> GetUnlocks(PlayerProfile? p) =>
-			JsonSerializer.Deserialize<List<string>>(p?.UnlockedWeapons ?? "[\"blaster\"]") ?? new List<string> { "blaster" };
+		static List<string> GetUnlocks(PlayerProfile p) =>
+			JsonSerializer.Deserialize<List<string>>(p.UnlockedWeapons ?? "[\"default\"]") ?? new List<string> { "default" };
 
 		static string WeaponCards(List<WeaponShopEntry> weapons, List<string> unlocks, string equipped, string mode)
 		{
@@ -192,9 +192,16 @@ namespace MasterServer
 					if (profile != null) { mpGems = profile.MultiplayerGems; spGems = profile.SingleplayerGems; }
 				}
 
-				// Evict stale lobbies (1 min timeout)
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 1).Select(kv => kv.Key).ToList();
-				foreach (var s in stale) ServerState.ActiveLobbies.TryRemove(s, out _);
+				// Evict stale lobbies
+				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
+				foreach (var s in stale)
+				{
+					ServerState.ActiveLobbies.TryRemove(s, out _);
+					if (ServerState.ActiveRelays.TryRemove(s, out var relay))
+					{
+						relay.Stop();
+					}
+				}
 
 				var serverRows = new System.Text.StringBuilder();
 				foreach (var lobby in ServerState.ActiveLobbies.Values)
@@ -220,9 +227,6 @@ namespace MasterServer
 					      </span>
 					      <span style='color:var(--text-muted);display:flex;align-items:center;gap:0.3rem'>
 					        👥 {lobby.CurrentPlayers}/{lobby.MaxPlayers}
-					      </span>
-					      <span style='color:var(--text-muted);background:rgba(255,255,255,0.05);padding:0.1rem 0.4rem;border-radius:4px;font-family:monospace;font-size:0.75rem' title='Connect via console: connect master_ip:{lobby.AdvertisedPort}'>
-					        🔌 {lobby.AdvertisedPort}
 					      </span>
 					      {(lobby.UseBots ? "<span title='Bots Enabled'>🤖</span>" : "")}
 					    </div>
@@ -295,7 +299,7 @@ namespace MasterServer
 				string body = $@"
 				<div class='page-wrap'>
 				  <div class='hero'>
-				    <h1>Potential Adventure</h1>
+				    <h1>Carom<em>Masse</em></h1>
 				    <p>Choose a server and drop in. {(loggedIn ? "Your loadout is ready." : "Sign in to save your progress.")}</p>
 				  </div>
 
@@ -316,7 +320,6 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var u = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
-				if (u == null) { context.Response.Redirect("/logout"); return; }
 
 				string kd = u.TotalFrags > 0 ? u.TotalFrags.ToString() : "—";
 
@@ -361,7 +364,6 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var u = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
-				if (u == null) { context.Response.Redirect("/logout"); return; }
 
 				var weapons = LoadWeaponEntries(app);
 				// Always unlock "blaster" for everyone
@@ -574,7 +576,6 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
-				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				var unlocks = JsonSerializer.Deserialize<List<string>>(user.UnlockedWeapons ?? "[]") ?? new List<string>();
 				if (unlocks.Contains(req.WeaponId)) { await context.Response.WriteAsync("Already unlocked!"); return; }
@@ -610,7 +611,6 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
-				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				var unlocks = JsonSerializer.Deserialize<List<string>>(user.UnlockedWeapons ?? "[]") ?? new List<string>();
 				if (req.WeaponId != "blaster" && !unlocks.Contains(req.WeaponId))
@@ -636,7 +636,6 @@ namespace MasterServer
 				using var scope = app.Services.CreateScope();
 				var db = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
 				var user = await db.PlayerProfiles.FirstOrDefaultAsync(p => p.Username == context.User.Identity.Name);
-				if (user == null) { context.Response.StatusCode = 401; return; }
 
 				if (req.Type == "gadget")
 				{
@@ -672,8 +671,15 @@ namespace MasterServer
 				bool loggedIn = context.User.Identity?.IsAuthenticated == true;
 				string username = context.User.Identity?.Name ?? "";
 
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 1).Select(kv => kv.Key).ToList();
-				foreach (var s in stale) ServerState.ActiveLobbies.TryRemove(s, out _);
+				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
+				foreach (var s in stale)
+				{
+					ServerState.ActiveLobbies.TryRemove(s, out _);
+					if (ServerState.ActiveRelays.TryRemove(s, out var relay))
+					{
+						relay.Stop();
+					}
+				}
 
 				await JsonSerializer.SerializeAsync(context.Response.Body, ServerState.ActiveLobbies.Values.Select(l => {
 					string joinUrl = "";
@@ -682,20 +688,7 @@ namespace MasterServer
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new { 
-						name = l.LobbyName, 
-						map = l.CurrentMap, 
-						official = l.IsOfficial, 
-						locked = l.HasPassword, 
-						joinUrl, 
-						address = l.AdvertisedAddress, 
-						port = l.AdvertisedPort,
-						hostName = l.HostName,
-						players = l.CurrentPlayers,
-						maxPlayers = l.MaxPlayers,
-						mode = l.MapMode,
-						bots = l.UseBots
-					};
+					return new { name = l.LobbyName, map = l.CurrentMap, official = l.IsOfficial, locked = l.HasPassword, joinUrl };
 				}));
 			});
 
