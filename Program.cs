@@ -7,6 +7,10 @@ using MasterServer;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var urls = builder.Configuration["Urls"];
+if (!string.IsNullOrEmpty(urls))
+	builder.WebHost.UseUrls(urls);
+
 builder.Services.AddDbContext<MasterDbContext>(options =>
 	options.UseSqlite("Data Source=masterserver.db"));
 
