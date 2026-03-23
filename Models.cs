@@ -29,6 +29,7 @@ namespace MasterServer.Models
 
 	public class LobbyRecord
 	{
+		public string HostToken { get; set; } = string.Empty;
 		public string JoinCode { get; set; } = string.Empty;
 		public string LobbyName { get; set; } = string.Empty;
 		public string HostName { get; set; } = string.Empty;
@@ -46,6 +47,7 @@ namespace MasterServer.Models
 
 	public class PrepareLobbyRequest
 	{
+		public string HostToken { get; set; } = string.Empty;
 		public string LobbyName { get; set; } = string.Empty;
 		public string HostName { get; set; } = string.Empty;
 		public int RequestedPort { get; set; }

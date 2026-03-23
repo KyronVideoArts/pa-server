@@ -228,6 +228,9 @@ namespace MasterServer
 					      <span style='color:var(--text-muted);display:flex;align-items:center;gap:0.3rem'>
 					        👥 {lobby.CurrentPlayers}/{lobby.MaxPlayers}
 					      </span>
+					      <span style='color:var(--text-muted);background:rgba(255,255,255,0.05);padding:0.1rem 0.4rem;border-radius:4px;font-family:monospace;font-size:0.75rem' title='Connect via console: connect master_ip:{lobby.AdvertisedPort}'>
+					        🔌 {lobby.AdvertisedPort}
+					      </span>
 					      {(lobby.UseBots ? "<span title='Bots Enabled'>🤖</span>" : "")}
 					    </div>
 					  </div>
@@ -681,14 +684,26 @@ namespace MasterServer
 					}
 				}
 
-				await JsonSerializer.SerializeAsync(context.Response.Body, ServerState.ActiveLobbies.Values.Select(l => {
+				await context.Response.WriteAsJsonAsync(ServerState.ActiveLobbies.Values.Select(l => {
 					string joinUrl = "";
 					if (loggedIn) {
 						var t = Guid.NewGuid().ToString("N");
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new { name = l.LobbyName, map = l.CurrentMap, official = l.IsOfficial, locked = l.HasPassword, joinUrl };
+					return new { 
+						name = l.LobbyName, 
+						map = l.CurrentMap, 
+						mode = l.MapMode,
+						hostName = l.HostName,
+						players = l.CurrentPlayers,
+						maxPlayers = l.MaxPlayers,
+						port = l.AdvertisedPort,
+						official = l.IsOfficial, 
+						locked = l.HasPassword, 
+						bots = l.UseBots,
+						joinUrl 
+					};
 				}));
 			});
 
@@ -762,16 +777,16 @@ namespace MasterServer
 				var hostEp = new System.Net.IPEndPoint(hostIp, request?.RequestedPort ?? 64087);
 
 				// REUSE OR RECREATE: Check if a relay for this host already exists and is fresh.
-				// This prevents the "Remote disconnected" issue when the game re-calls prepare.
+				// We identify the same host session by HostToken.
 				var existing = ServerState.ActiveRelays
-					.FirstOrDefault(kv => kv.Value.ExpectedHostIp != null
-						&& kv.Value.ExpectedHostIp.Equals(hostIp));
+					.FirstOrDefault(kv => !string.IsNullOrEmpty(kv.Value.HostToken)
+						&& kv.Value.HostToken.Equals(request?.HostToken));
 
 				if (existing.Value != null)
 				{
 					if (ServerState.ActiveLobbies.TryGetValue(existing.Key, out var existingLobby))
 					{
-						Console.WriteLine($"[PROXY] Reusing existing relay {existing.Key} for host {hostIp}");
+						Console.WriteLine($"[PROXY] Reusing existing relay {existing.Key} for host token {request?.HostToken}");
 						context.Response.ContentType = "application/json";
 						var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 						await JsonSerializer.SerializeAsync(context.Response.Body, new
@@ -787,8 +802,8 @@ namespace MasterServer
 
 				// If no fresh one to reuse, tear down any old ones for this host (stale)
 				var staleRelays = ServerState.ActiveRelays
-					.Where(kv => kv.Value.ExpectedHostIp != null
-						&& kv.Value.ExpectedHostIp.Equals(hostIp))
+					.Where(kv => !string.IsNullOrEmpty(kv.Value.HostToken)
+						&& kv.Value.HostToken.Equals(request?.HostToken))
 					.Select(kv => kv.Key).ToList();
 				foreach (var staleKey in staleRelays)
 				{
@@ -798,7 +813,7 @@ namespace MasterServer
 					ServerState.ActiveLobbies.TryRemove(staleKey, out _);
 				}
 
-				var relay = new RelayLobby(0, hostEp, hostIp);
+				var relay = new RelayLobby(0, hostEp, hostIp, request?.HostToken);
 				var boundPort = ((System.Net.IPEndPoint)relay.MainSocket.Client.LocalEndPoint!).Port;
 				var joinCode = boundPort.ToString();
 				_ = relay.Start();
@@ -806,6 +821,7 @@ namespace MasterServer
 
 				var lobby = new LobbyRecord
 				{
+					HostToken = request?.HostToken ?? string.Empty,
 					JoinCode = joinCode,
 					LobbyName = !string.IsNullOrEmpty(request?.LobbyName) ? request.LobbyName : "P2P Server",
 					HostName = request?.HostName ?? "Unknown",

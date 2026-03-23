@@ -10,6 +10,7 @@ namespace MasterServer.Services
 {
 	public class RelayLobby
 	{
+		public string? HostToken;
 		public int JoinPort;
 		public UdpClient MainSocket;
 		public IPEndPoint? HostEndpoint;
@@ -18,12 +19,13 @@ namespace MasterServer.Services
 		private CancellationTokenSource _cts = new CancellationTokenSource();
 		private int _virtualPortCounter = 0;
 
-		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null)
+		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null, string? hostToken = null)
 		{
 			JoinPort = port;
 			MainSocket = new UdpClient(port);
 			HostEndpoint = NormalizeEndpoint(hostEp);
 			ExpectedHostIp = expectedHostIp;
+			HostToken = hostToken;
 			if (ExpectedHostIp != null && ExpectedHostIp.IsIPv4MappedToIPv6)
 				ExpectedHostIp = ExpectedHostIp.MapToIPv4();
 
