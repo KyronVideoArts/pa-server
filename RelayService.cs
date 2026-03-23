@@ -21,8 +21,8 @@ namespace MasterServer.Services
 
 		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null, string? hostToken = null)
 		{
-			JoinPort = port;
 			MainSocket = new UdpClient(port);
+			JoinPort = ((IPEndPoint)MainSocket.Client.LocalEndPoint!).Port;
 			HostEndpoint = NormalizeEndpoint(hostEp);
 			ExpectedHostIp = expectedHostIp;
 			HostToken = hostToken;

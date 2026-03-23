@@ -786,6 +786,15 @@ namespace MasterServer
 				{
 					if (ServerState.ActiveLobbies.TryGetValue(existing.Key, out var existingLobby))
 					{
+						// Refresh lobby info in case name or settings changed
+						existingLobby.LobbyName = !string.IsNullOrEmpty(request?.LobbyName) ? request.LobbyName : existingLobby.LobbyName;
+						existingLobby.HostName = request?.HostName ?? existingLobby.HostName;
+						existingLobby.MaxPlayers = request?.MaxPlayers ?? existingLobby.MaxPlayers;
+						existingLobby.UseBots = request?.UseBots ?? existingLobby.UseBots;
+						existingLobby.MapMode = request?.MapMode ?? existingLobby.MapMode;
+						existingLobby.IsOfficial = request?.ServerApiKey == ServerState.ServerApiKey;
+						existingLobby.LastHeartbeat = DateTime.UtcNow;
+
 						Console.WriteLine($"[PROXY] Reusing existing relay {existing.Key} for host token {request?.HostToken}");
 						context.Response.ContentType = "application/json";
 						var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
