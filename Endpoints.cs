@@ -319,7 +319,47 @@ namespace MasterServer
 					</a>");
 				}
 
-				string serversHtml = ServerState.ActiveLobbies.Count == 0
+				foreach (var lobby in ServerState.ActiveIceLobbies.Values)
+				{
+					string joinUrl = "#";
+					if (loggedIn)
+					{
+						var token = Guid.NewGuid().ToString("N");
+						ServerState.JoinTokens[token] = username;
+						joinUrl = $"gameprotocol://join/{lobby.JoinCode}?token={token}";
+					}
+					serverRows.Append($@"
+					<a class='server-row' href='{joinUrl}'>
+					  <div class='server-status-dot'></div>
+					  <div style='flex:1'>
+					    <div class='server-name'>{lobby.LobbyName}</div>
+					    <div class='server-map' style='display:flex;gap:1.25rem;margin-top:0.4rem;align-items:center'>
+					      <span>ðŸ“ {lobby.CurrentMap}</span>
+					      <span style='color:var(--text-muted);font-size:0.75rem;padding:0.1rem 0.4rem;border-radius:4px;border:1px solid rgba(255,255,255,0.1)'>{lobby.MapMode}</span>
+					      <span style='color:var(--text-muted);display:flex;align-items:center;gap:0.3rem'>
+					        <svg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'></path><circle cx='12' cy='7' r='4'></circle></svg>
+					        {lobby.HostName}
+					      </span>
+					      <span style='color:var(--text-muted);display:flex;align-items:center;gap:0.3rem'>
+					        ðŸ‘¥ {lobby.CurrentPlayers}/{lobby.MaxPlayers}
+					      </span>
+					      <span style='color:var(--text-muted);background:rgba(255,255,255,0.05);padding:0.1rem 0.4rem;border-radius:4px;font-family:monospace;font-size:0.75rem' title='ICE join code'>
+					        ðŸ”Œ {lobby.JoinCode}
+					      </span>
+					      {(lobby.UseBots ? "<span title='Bots Enabled'>ðŸ¤–</span>" : "")}
+					    </div>
+					  </div>
+					  <div style='display:flex;gap:0.4rem;align-items:center;height:fit-content'>
+					    {(lobby.IsOfficial ? "<span class='server-badge badge-official'>Official</span>" : "<span class='server-badge badge-p2p'>P2P</span>")}
+					    {(lobby.HasPassword ? "<span class='server-badge badge-locked'>ðŸ”’</span>" : "")}
+					  </div>
+					  <div style='display:flex;align-items:center'>
+					    {(loggedIn ? $"<span class='btn-join'>Join â†’</span>" : "<span style='font-size:0.8rem;color:var(--text-muted)'>Login to Join</span>")}
+					  </div>
+					</a>");
+				}
+
+				string serversHtml = (ServerState.ActiveLobbies.Count + ServerState.ActiveIceLobbies.Count) == 0
 					? "<div class='empty-state'><div style='font-size:3rem'>🛸</div><p style='margin-top:0.75rem'>No servers online right now.</p></div>"
 					: serverRows.ToString();
 
@@ -806,7 +846,7 @@ namespace MasterServer
 
 			app.MapGet("/api/v1/lobbies/{code}", async context =>
 			{
-				var code = context.Request.RouteValues["code"]?.ToString();
+				var code = context.Request.RouteValues["code"]?.ToString()?.Trim().ToUpperInvariant();
 				if (code != null && ServerState.ActiveLobbies.TryGetValue(code, out var lobby))
 				{
 					context.Response.ContentType = "application/json";
@@ -1060,7 +1100,7 @@ namespace MasterServer
 			{
 				PruneStaleGameState();
 
-				var code = context.Request.RouteValues["code"]?.ToString();
+				var code = context.Request.RouteValues["code"]?.ToString()?.Trim().ToUpperInvariant();
 				if (string.IsNullOrWhiteSpace(code) || !ServerState.ActiveIceLobbies.TryGetValue(code, out var lobby) || !ServerState.ActiveIceSessions.TryGetValue(lobby.HostSessionId, out var hostSession))
 				{
 					context.Response.StatusCode = 404;
