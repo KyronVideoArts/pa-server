@@ -1,0 +1,28 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Code
+.vscode/
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / Local Config
+appsettings.json
+!appsettings.example.json
