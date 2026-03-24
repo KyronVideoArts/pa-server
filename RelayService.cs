@@ -8,6 +8,20 @@ using System.Threading.Tasks;
 
 namespace MasterServer.Services
 {
+	public class VirtualSocketPoolEntry
+	{
+		public UdpClient Socket;
+		public int Port;
+		public IPEndPoint? DiscoveredHostEndpoint;
+		public IPEndPoint? InUseByClient;
+
+		public VirtualSocketPoolEntry(UdpClient socket, int port)
+		{
+			Socket = socket;
+			Port = port;
+		}
+	}
+
 	public class RelayLobby
 	{
 		public string? HostToken;
@@ -15,9 +29,10 @@ namespace MasterServer.Services
 		public UdpClient MainSocket;
 		public IPEndPoint? HostEndpoint;
 		public IPAddress? ExpectedHostIp;
-		public ConcurrentDictionary<IPEndPoint, UdpClient> ClientSockets = new ConcurrentDictionary<IPEndPoint, UdpClient>();
+		public ConcurrentDictionary<IPEndPoint, VirtualSocketPoolEntry> ClientSockets = new ConcurrentDictionary<IPEndPoint, VirtualSocketPoolEntry>();
+		private List<VirtualSocketPoolEntry> _pool = new List<VirtualSocketPoolEntry>();
 		private CancellationTokenSource _cts = new CancellationTokenSource();
-		private int _virtualPortCounter = 0;
+		private int _poolIndex = 0;
 
 		public RelayLobby(int port, IPEndPoint? hostEp = null, IPAddress? expectedHostIp = null, string? hostToken = null)
 		{
@@ -29,11 +44,59 @@ namespace MasterServer.Services
 			if (ExpectedHostIp != null && ExpectedHostIp.IsIPv4MappedToIPv6)
 				ExpectedHostIp = ExpectedHostIp.MapToIPv4();
 
+			// Pre-allocate 5 virtual sockets (JoinPort + 1..5) to catch Symmetric NAT tickles.
+			for (int i = 1; i <= 5; i++)
+			{
+				try
+				{
+					var s = new UdpClient(JoinPort + i);
+					SuppressConnectionReset(s);
+					var entry = new VirtualSocketPoolEntry(s, JoinPort + i);
+					_pool.Add(entry);
+					// Start the permanent receive loop for this pooled socket.
+					_ = VirtualSocketLoop(entry);
+				}
+				catch { /* Port already in use, skip this one */ }
+			}
+
 			// Suppress WSAECONNRESET on Windows to prevent ReceiveAsync from throwing
 			// when a peer is unreachable.
 			SuppressConnectionReset(MainSocket);
 
-			Console.WriteLine($"[PROXY] Created RelayLobby on JoinPort {((IPEndPoint)MainSocket.Client.LocalEndPoint!).Port} for Host: {HostEndpoint}");
+			Console.WriteLine($"[PROXY] Created RelayLobby on JoinPort {JoinPort} for Host: {HostEndpoint}. Pool size: {_pool.Count}");
+		}
+
+		private async Task VirtualSocketLoop(VirtualSocketPoolEntry entry)
+		{
+			while (!_cts.Token.IsCancellationRequested)
+			{
+				try
+				{
+					var res = await entry.Socket.ReceiveAsync();
+					var remoteEp = NormalizeEndpoint(res.RemoteEndPoint)!;
+
+					// If this packet is from the host IP, record/update discovery.
+					if (ExpectedHostIp != null && remoteEp.Address.Equals(ExpectedHostIp))
+					{
+						entry.DiscoveredHostEndpoint = remoteEp;
+						if (HostEndpoint == null) HostEndpoint = remoteEp;
+						
+						// If this socket is in use by a client, forward the host's data back to that client.
+						var clientEp = entry.InUseByClient;
+						if (clientEp != null)
+						{
+							await MainSocket.SendAsync(res.Buffer, res.Buffer.Length, clientEp);
+						}
+					}
+				}
+				catch (ObjectDisposedException) { break; }
+				catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted) { break; }
+				catch (Exception ex)
+				{
+					if (_cts.Token.IsCancellationRequested) break;
+					Console.WriteLine($"[PROXY] VirtualSocketLoop Exception (Port {entry.Port}): {ex.Message}");
+				}
+			}
 		}
 
 		public void Stop()
@@ -41,10 +104,15 @@ namespace MasterServer.Services
 			Console.WriteLine($"[PROXY] Stopping RelayLobby on JoinPort {JoinPort}");
 			_cts.Cancel();
 			try { MainSocket?.Close(); } catch { }
-			foreach (var client in ClientSockets.Values)
+			foreach (var entry in _pool)
 			{
-				try { client.Close(); } catch { }
+				try { entry.Socket.Close(); } catch { }
 			}
+			foreach (var entry in ClientSockets.Values)
+			{
+				try { entry.Socket.Close(); } catch { }
+			}
+			_pool.Clear();
 			ClientSockets.Clear();
 		}
 
@@ -123,29 +191,24 @@ namespace MasterServer.Services
 					}
 
 					// --- This is a client packet. Forward it to the host via a virtual socket. ---
-					if (!ClientSockets.TryGetValue(remoteEp, out var virtualSocket))
+					if (!ClientSockets.TryGetValue(remoteEp, out var poolEntry))
 					{
-						// Try to use a port the host might have tickled (JoinPort + 1-5)
-						// This helps with Port-Restricted NAT.
-						virtualSocket = CreateVirtualSocket();
-						
-						int vPort = ((IPEndPoint)virtualSocket.Client.LocalEndPoint!).Port;
-						Console.WriteLine($"[PROXY] New client connected from {remoteEp}. Created virtual socket on port {vPort}");
-
-						ClientSockets[remoteEp] = virtualSocket;
-
-						// Spin up the reverse-direction forwarder (host → client)
-						_ = RouteHostToClient(virtualSocket, remoteEp);
+						poolEntry = AssignPoolEntry(remoteEp);
+						ClientSockets[remoteEp] = poolEntry;
+						// No need to spin up RouteHostToClient anymore, 
+						// as VirtualSocketLoop handles the reverse direction.
 					}
 
 					// Forward client data to host
-					if (HostEndpoint != null)
+					// Prefer the discovered per-port endpoint (Symmetric NAT support)
+					var target = poolEntry.DiscoveredHostEndpoint ?? HostEndpoint;
+					if (target != null)
 					{
-						await virtualSocket.SendAsync(res.Buffer, res.Buffer.Length, HostEndpoint);
+						await poolEntry.Socket.SendAsync(res.Buffer, res.Buffer.Length, target);
 					}
 					else
 					{
-						Console.WriteLine($"[PROXY] Warning: Dropping client packet from {remoteEp} because HostEndpoint is not set yet.");
+						Console.WriteLine($"[PROXY] Warning: Dropping client packet from {remoteEp} because no HostEndpoint (main or discovered) is set.");
 					}
 				}
 				catch (ObjectDisposedException) { break; }
@@ -159,57 +222,48 @@ namespace MasterServer.Services
 			Console.WriteLine($"[PROXY] Start() loop ended for JoinPort {JoinPort}");
 		}
 
-		private UdpClient CreateVirtualSocket()
+		private VirtualSocketPoolEntry AssignPoolEntry(IPEndPoint clientEndpoint)
 		{
-			// Try to bind to ports the host might have tickled (JoinPort + 1-5)
-			for (int i = 0; i < 5; i++)
+			// Try to find a pre-allocated entry that's not in use.
+			foreach (var entry in _pool)
 			{
-				int offset = (Interlocked.Increment(ref _virtualPortCounter) % 5) + 1;
-				int port = JoinPort + offset;
-				try
+				if (Interlocked.CompareExchange(ref entry.InUseByClient, clientEndpoint, null) == null)
 				{
-					var s = new UdpClient(port);
-					SuppressConnectionReset(s);
-					return s;
+					Console.WriteLine($"[PROXY] Client {clientEndpoint} assigned pooled virtual socket on port {entry.Port}");
+					return entry;
 				}
-				catch { /* Port already in use, try next */ }
 			}
 
-			// Fallback to random port
-			var fallback = new UdpClient(0);
-			SuppressConnectionReset(fallback);
-			return fallback;
+			// Fallback: Create a new random virtual socket
+			var fallbackSocket = new UdpClient(0);
+			SuppressConnectionReset(fallbackSocket);
+			var fallbackEntry = new VirtualSocketPoolEntry(fallbackSocket, ((IPEndPoint)fallbackSocket.Client.LocalEndPoint!).Port);
+			fallbackEntry.InUseByClient = clientEndpoint;
+			Console.WriteLine($"[PROXY] Pool exhausted. Client {clientEndpoint} assigned fallback virtual socket on port {fallbackEntry.Port}");
+			_ = FallbackRouteHostToClient(fallbackEntry, clientEndpoint);
+			return fallbackEntry;
 		}
 
 		/// <summary>
-		/// Reverse-direction forwarder: receives packets from the host on the virtual socket
-		/// and sends them back to the client through the MainSocket (so the client sees
-		/// responses originating from the relay's public port).
+		/// Fallback receive loop for non-pooled (overflow) virtual sockets.
 		/// </summary>
-		private async Task RouteHostToClient(UdpClient virtualSocket, IPEndPoint clientEndpoint)
+		private async Task FallbackRouteHostToClient(VirtualSocketPoolEntry entry, IPEndPoint clientEndpoint)
 		{
-			int vPort = ((IPEndPoint)virtualSocket.Client.LocalEndPoint!).Port;
-			Console.WriteLine($"[PROXY] RouteHostToClient started for virtual port {vPort} -> client {clientEndpoint}");
-
 			while (!_cts.Token.IsCancellationRequested)
 			{
 				try
 				{
-					var res = await virtualSocket.ReceiveAsync();
-					// Forward host's response back to the original client through MainSocket
-					await MainSocket.SendAsync(res.Buffer, res.Buffer.Length, clientEndpoint);
+					var res = await entry.Socket.ReceiveAsync();
+					var remoteEp = NormalizeEndpoint(res.RemoteEndPoint)!;
+					if (ExpectedHostIp != null && remoteEp.Address.Equals(ExpectedHostIp))
+					{
+						entry.DiscoveredHostEndpoint = remoteEp;
+						if (HostEndpoint == null) HostEndpoint = remoteEp;
+						await MainSocket.SendAsync(res.Buffer, res.Buffer.Length, clientEndpoint);
+					}
 				}
-				catch (ObjectDisposedException) { break; }
-				catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted) { break; }
-				catch (Exception ex)
-				{
-					if (_cts.Token.IsCancellationRequested) break;
-					Console.WriteLine($"[PROXY] RouteHostToClient Exception (vPort {vPort}): {ex.Message}");
-					break;
-				}
+				catch { break; }
 			}
-
-			Console.WriteLine($"[PROXY] RouteHostToClient ended for virtual port {vPort} -> client {clientEndpoint}");
 		}
 	}
 }

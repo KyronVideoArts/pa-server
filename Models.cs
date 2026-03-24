@@ -82,4 +82,19 @@ namespace MasterServer.Models
 		public int Gems { get; set; }
 		public string LoadoutId { get; set; } = string.Empty;
 	}
+
+	public class ServerListEntry
+	{
+		public string name { get; set; } = "";
+		public string map { get; set; } = "";
+		public string mode { get; set; } = "";
+		public string hostName { get; set; } = "";
+		public int players { get; set; }
+		public int maxPlayers { get; set; }
+		public int port { get; set; }
+		public bool official { get; set; }
+		public bool locked { get; set; }
+		public bool bots { get; set; }
+		public string joinUrl { get; set; } = "";
+	}
 }

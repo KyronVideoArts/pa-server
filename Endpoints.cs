@@ -691,7 +691,7 @@ namespace MasterServer
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new { 
+					return new ServerListEntry { 
 						name = l.LobbyName, 
 						map = l.CurrentMap, 
 						mode = l.MapMode,
@@ -702,7 +702,7 @@ namespace MasterServer
 						official = l.IsOfficial, 
 						locked = l.HasPassword, 
 						bots = l.UseBots,
-						joinUrl 
+						joinUrl = joinUrl
 					};
 				}));
 			});
