@@ -9,6 +9,8 @@ namespace MasterServer
 		public static ConcurrentDictionary<string, string> JoinTokens = new();
 		public static ConcurrentDictionary<string, LobbyRecord> ActiveLobbies = new();
 		public static ConcurrentDictionary<string, RelayLobby> ActiveRelays = new();
+		public static ConcurrentDictionary<string, IceLobbyRecord> ActiveIceLobbies = new();
+		public static ConcurrentDictionary<string, IceSessionRecord> ActiveIceSessions = new();
 		public const string ServerApiKey = "SECRET_API_KEY";
 	}
 }

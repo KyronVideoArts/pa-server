@@ -174,6 +174,89 @@ namespace MasterServer
 			return list;
 		}
 
+		static void RemoveLegacyLobby(string joinCode)
+		{
+			ServerState.ActiveLobbies.TryRemove(joinCode, out _);
+			if (ServerState.ActiveRelays.TryRemove(joinCode, out var relay))
+			{
+				relay.Stop();
+			}
+		}
+
+		static void RemoveIceLobby(string joinCode)
+		{
+			ServerState.ActiveIceLobbies.TryRemove(joinCode, out _);
+			var staleSessions = ServerState.ActiveIceSessions
+				.Where(kv => kv.Value.LobbyCode == joinCode)
+				.Select(kv => kv.Key)
+				.ToList();
+			foreach (var sessionId in staleSessions)
+			{
+				ServerState.ActiveIceSessions.TryRemove(sessionId, out _);
+			}
+		}
+
+		static void PruneStaleGameState()
+		{
+			var staleLegacy = ServerState.ActiveLobbies
+				.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5)
+				.Select(kv => kv.Key)
+				.ToList();
+			foreach (var joinCode in staleLegacy)
+			{
+				RemoveLegacyLobby(joinCode);
+			}
+
+			var staleIce = ServerState.ActiveIceLobbies
+				.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5)
+				.Select(kv => kv.Key)
+				.ToList();
+			foreach (var joinCode in staleIce)
+			{
+				RemoveIceLobby(joinCode);
+			}
+		}
+
+		static string GenerateJoinCode()
+		{
+			const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+			var random = Random.Shared;
+			for (int attempt = 0; attempt < 32; ++attempt)
+			{
+				var chars = new char[6];
+				for (int i = 0; i < chars.Length; ++i)
+				{
+					chars[i] = alphabet[random.Next(alphabet.Length)];
+				}
+				var joinCode = new string(chars);
+				if (!ServerState.ActiveIceLobbies.ContainsKey(joinCode) && !ServerState.ActiveLobbies.ContainsKey(joinCode))
+				{
+					return joinCode;
+				}
+			}
+
+			return Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+		}
+
+		static string[] GetConfiguredIceServers(IConfiguration configuration, string sectionName)
+		{
+			return configuration
+				.GetSection(sectionName)
+				.Get<string[]>()?
+				.Where(value => !string.IsNullOrWhiteSpace(value))
+				.ToArray()
+				?? Array.Empty<string>();
+		}
+
+		static void ForwardIceEvent(string sessionId, IceSessionEvent sessionEvent)
+		{
+			if (ServerState.ActiveIceSessions.TryGetValue(sessionId, out var targetSession))
+			{
+				targetSession.AddEvent(sessionEvent);
+				targetSession.LastUpdatedUtc = DateTime.UtcNow;
+			}
+		}
+
 		// ── UI endpoints ──────────────────────────────────────────────────────
 		static void MapUIEndpoints(WebApplication app)
 		{
@@ -193,15 +276,7 @@ namespace MasterServer
 				}
 
 				// Evict stale lobbies
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
-				foreach (var s in stale)
-				{
-					ServerState.ActiveLobbies.TryRemove(s, out _);
-					if (ServerState.ActiveRelays.TryRemove(s, out var relay))
-					{
-						relay.Stop();
-					}
-				}
+				PruneStaleGameState();
 
 				var serverRows = new System.Text.StringBuilder();
 				foreach (var lobby in ServerState.ActiveLobbies.Values)
@@ -674,37 +749,51 @@ namespace MasterServer
 				bool loggedIn = context.User.Identity?.IsAuthenticated == true;
 				string username = context.User.Identity?.Name ?? "";
 
-				var stale = ServerState.ActiveLobbies.Where(kv => (DateTime.UtcNow - kv.Value.LastHeartbeat).TotalMinutes > 5).Select(kv => kv.Key).ToList();
-				foreach (var s in stale)
-				{
-					ServerState.ActiveLobbies.TryRemove(s, out _);
-					if (ServerState.ActiveRelays.TryRemove(s, out var relay))
-					{
-						relay.Stop();
-					}
-				}
+				PruneStaleGameState();
 
-				await context.Response.WriteAsJsonAsync(ServerState.ActiveLobbies.Values.Select(l => {
+				var legacyEntries = ServerState.ActiveLobbies.Values.Select(l => {
 					string joinUrl = "";
 					if (loggedIn) {
 						var t = Guid.NewGuid().ToString("N");
 						ServerState.JoinTokens[t] = username;
 						joinUrl = $"gameprotocol://join/{l.AdvertisedAddress}:{l.AdvertisedPort}?token={t}";
 					}
-					return new ServerListEntry { 
-						name = l.LobbyName, 
-						map = l.CurrentMap, 
+					return new ServerListEntry {
+						name = l.LobbyName,
+						map = l.CurrentMap,
 						mode = l.MapMode,
 						hostName = l.HostName,
 						players = l.CurrentPlayers,
 						maxPlayers = l.MaxPlayers,
 						port = l.AdvertisedPort,
-						official = l.IsOfficial, 
-						locked = l.HasPassword, 
+						official = l.IsOfficial,
+						locked = l.HasPassword,
 						bots = l.UseBots,
 						joinUrl = joinUrl
 					};
-				}));
+				});
+				var iceEntries = ServerState.ActiveIceLobbies.Values.Select(l => {
+					string joinUrl = "";
+					if (loggedIn) {
+						var t = Guid.NewGuid().ToString("N");
+						ServerState.JoinTokens[t] = username;
+						joinUrl = $"gameprotocol://join/{l.JoinCode}?token={t}";
+					}
+					return new ServerListEntry {
+						name = l.LobbyName,
+						map = l.CurrentMap,
+						mode = l.MapMode,
+						hostName = l.HostName,
+						players = l.CurrentPlayers,
+						maxPlayers = l.MaxPlayers,
+						port = l.RequestedPort,
+						official = l.IsOfficial,
+						locked = l.HasPassword,
+						bots = l.UseBots,
+						joinUrl = joinUrl
+					};
+				});
+				await context.Response.WriteAsJsonAsync(legacyEntries.Concat(iceEntries));
 			});
 
 			app.MapGet("/api/v1/auth/hosttoken", context =>
@@ -745,11 +834,7 @@ namespace MasterServer
 					var code = codeProp.GetString();
 					if (code != null)
 					{
-						ServerState.ActiveLobbies.TryRemove(code, out _);
-						if (ServerState.ActiveRelays.TryRemove(code, out var relay))
-						{
-							relay.Stop();
-						}
+						RemoveLegacyLobby(code);
 					}
 				}
 				context.Response.StatusCode = 200;
@@ -871,6 +956,312 @@ namespace MasterServer
 					}
 					lobby.LastHeartbeat = DateTime.UtcNow;
 				}
+				if (request != null && ServerState.ActiveIceLobbies.TryGetValue(request.JoinCode, out var iceLobby))
+				{
+					iceLobby.CurrentMap = request.CurrentMap;
+					iceLobby.CurrentPlayers = request.CurrentPlayers;
+					if (iceLobby.LobbyName == "default" || iceLobby.LobbyName == "P2P Server" || string.IsNullOrEmpty(iceLobby.LobbyName))
+					{
+						iceLobby.LobbyName = request.CurrentMap;
+					}
+					iceLobby.LastHeartbeat = DateTime.UtcNow;
+				}
+				context.Response.StatusCode = 200;
+			});
+
+			app.MapPost("/api/v2/ice/host/prepare", async context =>
+			{
+				using var reader = new StreamReader(context.Request.Body);
+				var body = await reader.ReadToEndAsync();
+				var request = JsonSerializer.Deserialize<IcePrepareLobbyRequest>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+				if (request == null || string.IsNullOrWhiteSpace(request.HostToken))
+				{
+					context.Response.StatusCode = 400;
+					await context.Response.WriteAsync("Missing hostToken.");
+					return;
+				}
+
+				PruneStaleGameState();
+
+				var existing = ServerState.ActiveIceLobbies
+					.FirstOrDefault(kv => !string.IsNullOrWhiteSpace(kv.Value.HostToken) && kv.Value.HostToken == request.HostToken);
+
+				IceLobbyRecord lobby;
+				IceSessionRecord hostSession;
+				if (existing.Value != null && ServerState.ActiveIceSessions.TryGetValue(existing.Value.HostSessionId, out hostSession))
+				{
+					lobby = existing.Value;
+					lobby.LobbyName = string.IsNullOrWhiteSpace(request.LobbyName) ? lobby.LobbyName : request.LobbyName;
+					lobby.HostName = string.IsNullOrWhiteSpace(request.HostName) ? lobby.HostName : request.HostName;
+					lobby.HasPassword = !string.IsNullOrWhiteSpace(request.PasswordHash);
+					lobby.IsOfficial = request.ServerApiKey == ServerState.ServerApiKey;
+					lobby.RequestedPort = request.RequestedPort > 0 ? request.RequestedPort : lobby.RequestedPort;
+					lobby.MaxPlayers = request.MaxPlayers > 0 ? request.MaxPlayers : lobby.MaxPlayers;
+					lobby.UseBots = request.UseBots;
+					lobby.MapMode = string.IsNullOrWhiteSpace(request.MapMode) ? lobby.MapMode : request.MapMode;
+					lobby.LastHeartbeat = DateTime.UtcNow;
+
+					hostSession.PlayerName = lobby.HostName;
+					hostSession.Ice = request.Ice ?? new IceDescriptionRecord();
+					hostSession.LastUpdatedUtc = DateTime.UtcNow;
+				}
+				else
+				{
+					var staleIceLobbies = ServerState.ActiveIceLobbies
+						.Where(kv => !string.IsNullOrWhiteSpace(kv.Value.HostToken) && kv.Value.HostToken == request.HostToken)
+						.Select(kv => kv.Key)
+						.ToList();
+					foreach (var staleJoinCode in staleIceLobbies)
+					{
+						RemoveIceLobby(staleJoinCode);
+					}
+
+					var joinCode = GenerateJoinCode();
+					hostSession = new IceSessionRecord
+					{
+						SessionId = Guid.NewGuid().ToString("N"),
+						LobbyCode = joinCode,
+						Role = "host",
+						PlayerName = string.IsNullOrWhiteSpace(request.HostName) ? "Unknown" : request.HostName,
+						Ice = request.Ice ?? new IceDescriptionRecord(),
+						LastUpdatedUtc = DateTime.UtcNow
+					};
+					lobby = new IceLobbyRecord
+					{
+						JoinCode = joinCode,
+						HostToken = request.HostToken,
+						LobbyName = string.IsNullOrWhiteSpace(request.LobbyName) ? "P2P Server" : request.LobbyName,
+						HostName = hostSession.PlayerName,
+						HasPassword = !string.IsNullOrWhiteSpace(request.PasswordHash),
+						IsOfficial = request.ServerApiKey == ServerState.ServerApiKey,
+						RequestedPort = request.RequestedPort > 0 ? request.RequestedPort : 64087,
+						MaxPlayers = request.MaxPlayers > 0 ? request.MaxPlayers : 16,
+						UseBots = request.UseBots,
+						MapMode = string.IsNullOrWhiteSpace(request.MapMode) ? "Deathmatch" : request.MapMode,
+						HostSessionId = hostSession.SessionId,
+						LastHeartbeat = DateTime.UtcNow
+					};
+					ServerState.ActiveIceSessions[hostSession.SessionId] = hostSession;
+					ServerState.ActiveIceLobbies[joinCode] = lobby;
+				}
+
+				await context.Response.WriteAsJsonAsync(new
+				{
+					joinCode = lobby.JoinCode,
+					hostSessionId = lobby.HostSessionId,
+					hasPassword = lobby.HasPassword,
+					stunServers = GetConfiguredIceServers(app.Configuration, "Ice:StunServers"),
+					turnServers = GetConfiguredIceServers(app.Configuration, "Ice:TurnServers"),
+					ice = hostSession.Ice
+				});
+			});
+
+			app.MapGet("/api/v2/ice/lobbies/{code}", async context =>
+			{
+				PruneStaleGameState();
+
+				var code = context.Request.RouteValues["code"]?.ToString();
+				if (string.IsNullOrWhiteSpace(code) || !ServerState.ActiveIceLobbies.TryGetValue(code, out var lobby) || !ServerState.ActiveIceSessions.TryGetValue(lobby.HostSessionId, out var hostSession))
+				{
+					context.Response.StatusCode = 404;
+					return;
+				}
+
+				await context.Response.WriteAsJsonAsync(new
+				{
+					joinCode = lobby.JoinCode,
+					lobbyName = lobby.LobbyName,
+					hostName = lobby.HostName,
+					hasPassword = lobby.HasPassword,
+					currentMap = lobby.CurrentMap,
+					mapMode = lobby.MapMode,
+					currentPlayers = lobby.CurrentPlayers,
+					maxPlayers = lobby.MaxPlayers,
+					hostSessionId = lobby.HostSessionId,
+					ice = hostSession.Ice,
+					stunServers = GetConfiguredIceServers(app.Configuration, "Ice:StunServers"),
+					turnServers = GetConfiguredIceServers(app.Configuration, "Ice:TurnServers")
+				});
+			});
+
+			app.MapPost("/api/v2/ice/lobbies/{code}/join", async context =>
+			{
+				using var reader = new StreamReader(context.Request.Body);
+				var body = await reader.ReadToEndAsync();
+				var request = JsonSerializer.Deserialize<IceJoinLobbyRequest>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+				var code = context.Request.RouteValues["code"]?.ToString();
+				if (string.IsNullOrWhiteSpace(code) || !ServerState.ActiveIceLobbies.TryGetValue(code, out var lobby) || !ServerState.ActiveIceSessions.TryGetValue(lobby.HostSessionId, out var hostSession))
+				{
+					context.Response.StatusCode = 404;
+					return;
+				}
+
+				var joinSession = new IceSessionRecord
+				{
+					SessionId = Guid.NewGuid().ToString("N"),
+					LobbyCode = lobby.JoinCode,
+					Role = "joiner",
+					PlayerName = string.IsNullOrWhiteSpace(request?.PlayerName) ? "Joiner" : request.PlayerName,
+					RemoteSessionId = hostSession.SessionId,
+					Ice = request?.Ice ?? new IceDescriptionRecord(),
+					LastUpdatedUtc = DateTime.UtcNow
+				};
+				hostSession.RemoteSessionId = joinSession.SessionId;
+				hostSession.LastUpdatedUtc = DateTime.UtcNow;
+				lobby.LastHeartbeat = DateTime.UtcNow;
+				ServerState.ActiveIceSessions[joinSession.SessionId] = joinSession;
+
+				ForwardIceEvent(hostSession.SessionId, new IceSessionEvent
+				{
+					Type = "join",
+					SessionId = hostSession.SessionId,
+					RemoteSessionId = joinSession.SessionId,
+					Ice = joinSession.Ice,
+					Candidates = joinSession.Ice.Candidates.ToList()
+				});
+
+				await context.Response.WriteAsJsonAsync(new
+				{
+					joinCode = lobby.JoinCode,
+					sessionId = joinSession.SessionId,
+					hostSessionId = hostSession.SessionId,
+					lobbyName = lobby.LobbyName,
+					hostName = lobby.HostName,
+					hasPassword = lobby.HasPassword,
+					currentMap = lobby.CurrentMap,
+					mapMode = lobby.MapMode,
+					currentPlayers = lobby.CurrentPlayers,
+					maxPlayers = lobby.MaxPlayers,
+					ice = hostSession.Ice,
+					stunServers = GetConfiguredIceServers(app.Configuration, "Ice:StunServers"),
+					turnServers = GetConfiguredIceServers(app.Configuration, "Ice:TurnServers")
+				});
+			});
+
+			app.MapPost("/api/v2/ice/sessions/{id}/candidates", async context =>
+			{
+				using var reader = new StreamReader(context.Request.Body);
+				var body = await reader.ReadToEndAsync();
+				var request = JsonSerializer.Deserialize<IceCandidateSubmitRequest>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+				var sessionId = context.Request.RouteValues["id"]?.ToString();
+				if (string.IsNullOrWhiteSpace(sessionId) || !ServerState.ActiveIceSessions.TryGetValue(sessionId, out var session))
+				{
+					context.Response.StatusCode = 404;
+					return;
+				}
+
+				var candidates = request?.Candidates ?? new List<IceCandidateRecord>();
+				if (candidates.Count > 0)
+				{
+					session.Ice.Candidates.AddRange(candidates);
+					session.LastUpdatedUtc = DateTime.UtcNow;
+					if (!string.IsNullOrWhiteSpace(session.RemoteSessionId))
+					{
+						ForwardIceEvent(session.RemoteSessionId, new IceSessionEvent
+						{
+							Type = "candidates",
+							SessionId = session.SessionId,
+							RemoteSessionId = session.RemoteSessionId,
+							Candidates = candidates
+						});
+					}
+				}
+
+				context.Response.StatusCode = 200;
+			});
+
+			app.MapGet("/api/v2/ice/sessions/{id}/events", async context =>
+			{
+				var sessionId = context.Request.RouteValues["id"]?.ToString();
+				if (string.IsNullOrWhiteSpace(sessionId) || !ServerState.ActiveIceSessions.TryGetValue(sessionId, out var session))
+				{
+					context.Response.StatusCode = 404;
+					return;
+				}
+
+				int after = 0;
+				if (int.TryParse(context.Request.Query["after"], out var parsedAfter))
+				{
+					after = Math.Max(0, parsedAfter);
+				}
+
+				int timeoutMs = 10000;
+				if (int.TryParse(context.Request.Query["timeoutMs"], out var parsedTimeout))
+				{
+					timeoutMs = Math.Clamp(parsedTimeout, 0, 15000);
+				}
+
+				var startedUtc = DateTime.UtcNow;
+				List<IceSessionEvent> events;
+				do
+				{
+					events = session.GetEventsSince(after);
+					if (events.Count > 0 || timeoutMs == 0)
+					{
+						break;
+					}
+
+					await Task.Delay(100);
+				}
+				while ((DateTime.UtcNow - startedUtc).TotalMilliseconds < timeoutMs);
+
+				session.LastUpdatedUtc = DateTime.UtcNow;
+				await context.Response.WriteAsJsonAsync(new
+				{
+					sessionId = session.SessionId,
+					events
+				});
+			});
+
+			app.MapPost("/api/v2/ice/sessions/{id}/connected", async context =>
+			{
+				using var reader = new StreamReader(context.Request.Body);
+				var body = await reader.ReadToEndAsync();
+				var request = JsonSerializer.Deserialize<IceConnectedRequest>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+				var sessionId = context.Request.RouteValues["id"]?.ToString();
+				if (string.IsNullOrWhiteSpace(sessionId) || !ServerState.ActiveIceSessions.TryGetValue(sessionId, out var session))
+				{
+					context.Response.StatusCode = 404;
+					return;
+				}
+
+				session.IsConnected = true;
+				session.SelectedRemoteAddress = request?.SelectedRemoteAddress ?? string.Empty;
+				session.SelectedRemotePort = request?.SelectedRemotePort ?? 0;
+				session.LastUpdatedUtc = DateTime.UtcNow;
+
+				if (!string.IsNullOrWhiteSpace(session.RemoteSessionId))
+				{
+					ForwardIceEvent(session.RemoteSessionId, new IceSessionEvent
+					{
+						Type = "connected",
+						SessionId = session.SessionId,
+						RemoteSessionId = session.RemoteSessionId,
+						SelectedRemoteAddress = session.SelectedRemoteAddress,
+						SelectedRemotePort = session.SelectedRemotePort
+					});
+				}
+
+				context.Response.StatusCode = 200;
+			});
+
+			app.MapPost("/api/v2/ice/host/close", async context =>
+			{
+				using var reader = new StreamReader(context.Request.Body);
+				var body = await reader.ReadToEndAsync();
+				var doc = JsonDocument.Parse(body);
+				if (doc.RootElement.TryGetProperty("joinCode", out var codeProp))
+				{
+					var code = codeProp.GetString();
+					if (!string.IsNullOrWhiteSpace(code))
+					{
+						RemoveIceLobby(code);
+					}
+				}
+
 				context.Response.StatusCode = 200;
 			});
 
